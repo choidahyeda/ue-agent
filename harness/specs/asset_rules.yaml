@@ -1,0 +1,204 @@
+# ============================================================
+# 에셋 및 성능 예산 규칙 (Asset Budget Rules)
+# - 검사 스크립트와 에이전트가 모두 이 파일 하나를 기준으로 동작
+# - severity: error = 제출 차단 / warning = 리포트만
+# ============================================================
+
+version: 1
+
+# ------------------------------------------------------------
+# 1. 카테고리: 경로로 에셋 종류를 판별하고, 카테고리별 예산을 다르게 적용
+#    (위에서부터 먼저 매칭되는 카테고리 적용)
+# ------------------------------------------------------------
+categories:
+  character:
+    paths: ["/Game/Characters/"]
+    texture_max_resolution: 2048
+    mesh_triangle_budget: 60000
+    material_max_instructions: 400
+  vfx:
+    paths: ["/Game/VFX/"]
+    texture_max_resolution: 1024
+    mesh_triangle_budget: 2000
+    material_max_instructions: 250
+    allow_translucent: true
+  ui:
+    paths: ["/Game/UI/"]
+    texture_max_resolution: 2048
+    require_power_of_two: false
+    require_mipmaps: false
+  architecture:
+    paths: ["/Game/Environment/Architecture/"]
+    texture_max_resolution: 2048
+    mesh_triangle_budget: 20000
+    material_max_instructions: 300
+  props:
+    paths: ["/Game/Environment/Props/"]
+    texture_max_resolution: 1024
+    mesh_triangle_budget: 5000
+    material_max_instructions: 300
+  default:
+    paths: ["/Game/"]
+    texture_max_resolution: 2048
+    mesh_triangle_budget: 10000
+    material_max_instructions: 300
+
+# 카테고리에서 따로 지정하지 않은 값의 기본값
+defaults:
+  require_power_of_two: true
+  require_mipmaps: true
+  allow_translucent: false
+  material_max_samplers: 8
+  mesh_max_material_slots: 4
+
+# ------------------------------------------------------------
+# 2. 네이밍 규칙
+# ------------------------------------------------------------
+naming:
+  # 에셋 클래스별 접두사 (unreal 클래스명 기준)
+  prefixes:
+    StaticMesh: "SM_"
+    SkeletalMesh: "SK_"
+    Texture2D: "T_"
+    Material: "M_"
+    MaterialInstanceConstant: "MI_"
+    MaterialFunction: "MF_"
+    Blueprint: "BP_"
+    NiagaraSystem: "NS_"
+
+  # 접두사 뒤 이름 형식: 대문자로 시작, 영문과 숫자, 밑줄 구분만 허용
+  name_pattern: "^[A-Z]{1,3}_[A-Z][A-Za-z0-9]*(_[A-Za-z0-9]+)*$"
+
+  # 이름에 들어가면 안 되는 토큰 (임시 에셋이 그대로 올라오는 경우)
+  forbidden_tokens: ["Copy", "New", "Untitled", "Test", "Temp", "Final", "Backup"]
+
+  # 텍스처 용도 접미사와, 접미사별 올바른 설정
+  texture_suffixes:
+    _D:   { usage: "BaseColor", compression: "TC_DEFAULT",   srgb: true }
+    _N:   { usage: "Normal",    compression: "TC_NORMALMAP", srgb: false }
+    _ORM: { usage: "Occlusion, Roughness, Metallic 패킹", compression: "TC_MASKS", srgb: false }
+    _M:   { usage: "Mask",      compression: "TC_MASKS",     srgb: false }
+    _E:   { usage: "Emissive",  compression: "TC_DEFAULT",   srgb: true }
+
+# ------------------------------------------------------------
+# 3. 규칙 목록
+#    - id: 리포트, 예외 목록, 테스트 정답지에서 공통으로 쓰는 식별자
+#    - why: 에이전트가 아티스트에게 위반 이유를 설명할 때 쓰는 근거
+#    - fix: 수정 방법 안내
+# ------------------------------------------------------------
+rules:
+  # --- 네이밍 ---
+  - id: NAME-001
+    target: all
+    severity: error
+    title: "클래스별 접두사 누락 또는 불일치"
+    why: "에셋 종류를 이름만 보고 구분할 수 있어야 검색, 참조 관리, 자동화 도구가 동작합니다."
+    fix: "naming.prefixes에 정의된 접두사로 이름을 변경하세요. 변경 시 리다이렉터 정리가 필요합니다."
+
+  - id: NAME-002
+    target: all
+    severity: error
+    title: "임시 에셋용 단어 포함"
+    why: "Copy, Test 같은 이름은 작업 중 임시 에셋이 저장소에 올라온 신호입니다."
+    fix: "용도가 드러나는 이름으로 바꾸거나, 불필요한 에셋이면 제출에서 제외하세요."
+
+  - id: NAME-003
+    target: Texture2D
+    severity: error
+    title: "텍스처 용도 접미사 누락"
+    why: "접미사로 텍스처 용도를 판별해 압축과 sRGB 설정을 검사합니다. 접미사가 없으면 설정 검증이 불가능합니다."
+    fix: "_D, _N, _ORM, _M, _E 중 용도에 맞는 접미사를 붙이세요."
+
+  # --- 텍스처 ---
+  - id: TEX-001
+    target: Texture2D
+    severity: error
+    title: "해상도가 2의 거듭제곱이 아님"
+    why: "2의 거듭제곱이 아니면 밉맵 생성과 텍스처 스트리밍이 비효율적으로 동작하고, 일부 플랫폼에서 메모리를 추가로 사용합니다."
+    fix: "512, 1024, 2048 등으로 리사이즈해서 다시 임포트하세요. UI 텍스처는 예외입니다."
+
+  - id: TEX-002
+    target: Texture2D
+    severity: error
+    title: "카테고리 최대 해상도 초과"
+    why: "텍스처 메모리 예산을 초과하면 스트리밍 풀 부족으로 흐릿한 텍스처와 히칭이 발생합니다."
+    fix: "카테고리 최대 해상도 이하로 줄이거나, Max Texture Size 또는 LOD Bias를 설정하세요. 꼭 필요하면 예외를 신청하세요."
+
+  - id: TEX-003
+    target: Texture2D
+    severity: error
+    title: "압축 방식 또는 sRGB 설정이 용도와 불일치"
+    why: "노멀맵이 기본 압축이면 조명이 틀어지고, 마스크 텍스처에 sRGB가 켜져 있으면 값이 감마 보정되어 러프니스와 메탈릭이 잘못 표현됩니다."
+    fix: "naming.texture_suffixes에 정의된 압축 방식과 sRGB 값으로 변경하세요."
+
+  - id: TEX-004
+    target: Texture2D
+    severity: warning
+    title: "밉맵 없음"
+    why: "밉맵이 없으면 멀리 있는 오브젝트에서 앨리어싱이 생기고 GPU 캐시 효율이 떨어집니다."
+    fix: "Mip Gen Settings를 FromTextureGroup으로 설정하세요. UI 텍스처는 예외입니다."
+
+  # --- 메시 ---
+  - id: MESH-001
+    target: StaticMesh
+    severity: warning
+    title: "Nanite 적용 권장 (고폴리곤인데 Nanite 꺼짐)"
+    why: "카테고리 트라이앵글 예산을 넘는 메시는 Nanite로 처리하는 편이 드로우 비용과 LOD 관리 부담이 적습니다."
+    fix: "Nanite를 활성화하세요. 반투명 머티리얼을 쓰는 메시는 Nanite 대상이 아니므로 예외 처리하세요."
+
+  - id: MESH-002
+    target: StaticMesh
+    severity: error
+    title: "비 Nanite 메시의 LOD 부족"
+    why: "Nanite를 쓰지 않는 메시는 LOD가 없으면 거리와 상관없이 원본 폴리곤을 모두 그립니다."
+    fix: "트라이앵글 2000개 이상인 비 Nanite 메시는 LOD를 3단계 이상 생성하세요."
+    params:
+      min_triangles: 2000
+      min_lod_count: 3
+
+  - id: MESH-003
+    target: StaticMesh
+    severity: warning
+    title: "머티리얼 슬롯 과다"
+    why: "머티리얼 슬롯마다 드로우콜이 추가됩니다."
+    fix: "머티리얼을 통합하거나 텍스처 아틀라스를 사용해 슬롯을 4개 이하로 줄이세요."
+
+  # --- 머티리얼 ---
+  - id: MAT-001
+    target: Material
+    severity: error
+    title: "셰이더 인스트럭션 수 예산 초과"
+    why: "픽셀 셰이더 인스트럭션이 많을수록 화면을 많이 덮을 때 GPU 시간이 크게 늘어납니다."
+    fix: "불필요한 노드를 정리하거나, 계산을 텍스처로 굽거나, Static Switch로 기능을 분리하세요."
+
+  - id: MAT-002
+    target: Material
+    severity: error
+    title: "텍스처 샘플러 수 초과"
+    why: "샘플러가 많으면 메모리 대역폭 비용이 커지고, 플랫폼 샘플러 한도에 걸릴 수 있습니다."
+    fix: "채널 패킹(ORM 등)으로 텍스처 수를 줄이거나 Shared Sampler를 사용하세요."
+
+  - id: MAT-003
+    target: Material
+    severity: warning
+    title: "허용되지 않은 카테고리에서 반투명 블렌드 모드 사용"
+    why: "반투명은 오버드로우와 정렬 비용이 크고 Nanite, 일부 라이팅 기능과 호환되지 않습니다."
+    fix: "Masked로 대체할 수 있는지 검토하세요. VFX 카테고리만 기본 허용입니다."
+
+  - id: MAT-004
+    target: StaticMesh
+    severity: warning
+    title: "메시가 원본 머티리얼을 직접 참조"
+    why: "원본 머티리얼을 직접 쓰면 값만 다른 변형마다 셰이더가 새로 컴파일되고, 머티리얼 수가 불필요하게 늘어납니다."
+    fix: "원본 머티리얼로 머티리얼 인스턴스(MI_)를 만들어 할당하세요."
+
+# ------------------------------------------------------------
+# 4. 예외 목록
+#    - 예외마다 사유, 담당자, 만료일을 반드시 기록 (무기한 예외 금지)
+# ------------------------------------------------------------
+exceptions:
+  - asset: "/Game/Characters/Hero/T_Hero_Armor_D"
+    rule: TEX-002
+    reason: "시네마틱 클로즈업용 히어로 에셋, 아트 디렉터 승인"
+    owner: "character-art"
+    expires: "2026-12-31"
